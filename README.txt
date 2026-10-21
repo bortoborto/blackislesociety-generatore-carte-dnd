@@ -1,6 +1,6 @@
-# Carte incantesimo 5E in italiano
+# Carte incantesimo 5E (regole 2024) in italiano
 
-Generatore di carte incantesimo stampabili per giochi di ruolo compatibili con la quinta edizione, in italiano. A partire da un CSV crea PDF in formato A3 con 25 carte per foglio, pronti per la stampa fronte/retro, in due layout: **scuro** e **chiaro**. Può anche creare una cartella per ogni classe, con fronte e retro nei colori di quella classe.
+Generatore di carte incantesimo stampabili, in italiano, per le regole 2024 della quinta edizione (quelle del System Reference Document 5.2.1, spesso chiamate informalmente "5.5"). A partire da un CSV crea PDF in formato A3 con 25 carte per foglio, pronti per la stampa fronte/retro, in due layout: **scuro** e **chiaro**. Può anche creare una cartella per ogni classe, con fronte e retro nei colori di quella classe.
 
 ![Anteprima dei retri per classe](docs/anteprima_retri_classe.png)
 
@@ -62,6 +62,21 @@ carte/
 └── Mago/
 ```
 
+### Edizione Black Isle Society
+
+Versione dedicata all'associazione [Black Isle Society](https://blackislesociety.com/) di Imola:
+
+- fronte in **bianco e nero**, con le evidenziazioni rese in grassetto, e fronte **chiaro**;
+- retro **nero** con il logo al centro di ogni carta.
+
+Salva il logo in `assets/logo_bis.png`, poi lancia:
+
+```bash
+python genera_carte.py incantesimi_srd_5.2.1_it.csv --bis
+```
+
+Se il logo è scuro, viene reso bianco in automatico per risaltare sul nero.
+
 ### Opzioni
 
 | Opzione | Effetto |
@@ -74,6 +89,8 @@ carte/
 | `--solo-classi` | Come `--per-classe`, ma senza i PDF con tutte le carte |
 | `--fronte-standard` | Nei PDF per classe usa il fronte nei colori normali |
 | `--retro-standard` | Nei PDF per classe usa il retro normale |
+| `--bis` | Edizione Black Isle Society: fronte in bianco e nero e in versione chiara, retro nero con il logo |
+| `--logo PERCORSO` | Logo per il retro dell'edizione `--bis` (default `assets/logo_bis.png`) |
 | `--senza-retro` | Non inserisce le pagine del retro |
 | `--senza-diagrammi` | Non disegna i diagrammi di gittata e area |
 
@@ -124,7 +141,7 @@ Il testo degli incantesimi proviene dal System Reference Document 5.2.1 in itali
 
 > Quest'opera include materiale tratto dal System Reference Document 5.2.1 ("SRD 5.2.1") di Wizards of the Coast LLC, disponibile all'indirizzo https://www.dndbeyond.com/srd. Il SRD 5.2.1 è concesso in licenza ai sensi della licenza di attribuzione 4.0 Internazionale di Creative Commons, disponibile all'indirizzo https://creativecommons.org/licenses/by/4.0/legalcode.
 
-Questo progetto non è affiliato a Wizards of the Coast né approvato da essa. È un materiale compatibile con la quinta edizione.
+Questo progetto non è affiliato a Wizards of the Coast né approvato da essa. È un materiale compatibile con la quinta edizione: "5.5" non è un nome ufficiale, perché le regole 2024 restano la quinta edizione. Per questo il SRD consente solo le diciture "compatibile con la quinta edizione" o "compatibile con 5E".
 
 - **Font:** [Ubuntu](https://design.ubuntu.com/font), Ubuntu Font Licence 1.0 (vedi `fonts/UFL.txt`).
 - **Codice:** _scegli una licenza, per esempio MIT, e aggiungi il file `LICENSE`._

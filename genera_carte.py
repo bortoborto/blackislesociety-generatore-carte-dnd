@@ -22,6 +22,9 @@ Opzioni utili:
     --solo-classi                 come --per-classe, ma senza i PDF completi
     --retro-standard              nei PDF per classe usa il retro normale
                                   (di default ogni classe ha il suo retro)
+    --bis                         edizione Black Isle Society: fronte in bianco e
+                                  nero e in versione chiara, retro nero con il logo
+                                  (logo in assets/logo_bis.png o con --logo PERCORSO)
     --fronte-standard             nei PDF per classe usa il fronte normale
                                   (di default il fronte e' tinto nel colore della classe)
     --out-dir cartella            dove salvare i PDF
@@ -99,6 +102,20 @@ THEMES = {
     ),
 }
 
+# tema bianco e nero (edizione Black Isle Society): niente colori,
+# le evidenziazioni diventano grassetto
+THEMES["bn"] = dict(
+    page_bg="#ffffff", cut="#b5b5b5",
+    card_fill="#ffffff", card_fill_top="#ffffff", card_border="#000000",
+    sep="#9a9a9a", title="#000000", text="#111111", stat_text="#111111",
+    dice="#000000", damage="#000000", save="#000000", dist="#000000",
+    cond="#000000", hl_box="#555555", hl_icon="#000000",
+    ring_fill="#ffffff", ring_stroke="#000000", ring_text="#000000",
+    grid="#000000", grid_alpha=0.16, diag_line="#000000", diag_label="#222222",
+    start="#000000", end="#000000", area="#000000",
+    icon_mode="bw", back="bis", hl_bold=True,
+)
+
 SCUOLE = ["abiurazione", "ammaliamento", "divinazione", "evocazione",
           "illusione", "invocazione", "necromanzia", "trasmutazione"]
 ORDINE_CLASSI = ["bardo", "chierico", "druido", "paladino", "ranger",
@@ -148,6 +165,10 @@ def icona(nome, mode):
         _ICON_CACHE[key] = None
         return None
     im = Image.open(path).convert("RGBA")
+    if mode == "bw":
+        a = im.split()[3].point(lambda v: 0 if v < 70 else min(255, int((v - 70) * 1.5)))
+        im = Image.new("RGBA", im.size, (0, 0, 0, 255))
+        im.putalpha(a)
     if mode == "light":
         r, g, b, a = im.split()
         rgb = Image.merge("RGB", (r, g, b))
@@ -260,7 +281,10 @@ def evidenzia(testo, th):
     for m in HL_RE.finditer(testo):
         out.append(escape(testo[pos:m.start()]))
         col = th[m.lastgroup]
-        out.append(f'<font color="{col}">{escape(m.group(0))}</font>')
+        frag = escape(m.group(0))
+        if th.get("hl_bold") and m.lastgroup in ("dice", "damage", "save"):
+            frag = f"<b>{frag}</b>"
+        out.append(f'<font color="{col}">{frag}</font>')
         pos = m.end()
     out.append(escape(testo[pos:]))
     return "".join(out)
@@ -804,6 +828,47 @@ def disegna_retro_classe(c, ox, oy, classe, tipo):
     c.restoreState()
 
 
+_LOGO = {}
+
+def carica_logo(path):
+    """Carica il logo; se e' scuro lo rende bianco, cosi' si vede sul nero."""
+    if path in _LOGO:
+        return _LOGO[path]
+    if not path or not os.path.exists(path):
+        sys.exit(f"Logo non trovato: {path}\n"
+                 "Scaricalo da https://blackislesociety.com/assets/logo.png e "
+                 "salvalo in assets/logo_bis.png (oppure indica il percorso con --logo).")
+    im = Image.open(path).convert("RGBA")
+    from PIL import ImageStat
+    maschera = im.getchannel("A").point(lambda v: 255 if v > 128 else 0)
+    lum = ImageStat.Stat(ImageOps.grayscale(im), mask=maschera).mean[0]
+    if lum < 110:   # logo scuro: lo invertiamo in bianco mantenendo la trasparenza
+        r, g, b, a = im.split()
+        rgb = ImageOps.invert(Image.merge("RGB", (r, g, b)))
+        im = Image.merge("RGBA", (*rgb.split(), a))
+    if im.getchannel("A").getextrema()[0] == 255:
+        # nessuna trasparenza: rendiamo trasparente lo sfondo nero
+        g = ImageOps.grayscale(im)
+        im.putalpha(g.point(lambda v: 0 if v < 25 else 255))
+    _LOGO[path] = (ImageReader(im), im.size)
+    return _LOGO[path]
+
+
+def pagina_retro_bis(c, logo_path, n):
+    c.setFillColor(HexColor("#000000"))
+    c.rect(0, 0, PAGE_W, PAGE_H, stroke=0, fill=1)
+    rd, (w0, h0) = carica_logo(logo_path)
+    max_w, max_h = CARD_W * 0.72, CARD_H * 0.55
+    sc = min(max_w / w0, max_h / h0)
+    w, h = w0 * sc, h0 * sc
+    for k in range(n):
+        col, row = k % COLS, k // COLS
+        col = COLS - 1 - col            # specchiato per il fronte/retro sul lato lungo
+        ox = MARGIN_X + col * PITCH_X
+        oy = PAGE_H - (MARGIN_Y + row * PITCH_Y) - CARD_H
+        c.drawImage(rd, ox + (CARD_W - w) / 2, oy + (CARD_H - h) / 2, w, h, mask="auto")
+
+
 def pagina_fronte(c, carte, th, opts, report):
     c.setFillColor(HexColor(th["page_bg"]))
     c.rect(0, 0, PAGE_W, PAGE_H, stroke=0, fill=1)
@@ -838,7 +903,7 @@ def pagina_retro(c, img, classe=None, tipo="dark", n=0):
 
 def genera(righe, tema, out_path, opts, classe=None):
     th = THEMES[tema]
-    if classe and not opts.fronte_standard:
+    if classe and not opts.fronte_standard and not opts.bis:
         th = tema_classe(th, classe)
     c = canvas.Canvas(out_path, pagesize=(PAGE_W, PAGE_H))
     c.setTitle(f"Carte incantesimi ({tema})")
@@ -853,7 +918,10 @@ def genera(righe, tema, out_path, opts, classe=None):
     for i in range(0, len(righe), per_pagina):
         pagina_fronte(c, righe[i:i + per_pagina], th, opts, report)
         c.showPage()
-        if not opts.senza_retro:
+        if not opts.senza_retro and opts.bis:
+            pagina_retro_bis(c, opts.logo, len(righe[i:i + per_pagina]))
+            c.showPage()
+        elif not opts.senza_retro:
             pagina_retro(c, back, None if opts.retro_standard else classe,
                          th["back"], len(righe[i:i + per_pagina]))
             c.showPage()
@@ -888,6 +956,10 @@ def main():
                     help="con --per-classe usa il retro normale invece di quello della classe")
     ap.add_argument("--fronte-standard", action="store_true",
                     help="con --per-classe lascia il fronte nei colori standard")
+    ap.add_argument("--bis", action="store_true",
+                    help="edizione Black Isle Society: fronte bianco e nero + chiaro, retro nero con logo")
+    ap.add_argument("--logo", default=os.path.join(ASSETS, "logo_bis.png"),
+                    help="percorso del logo per il retro dell'edizione --bis")
     ap.add_argument("--solo-classi", action="store_true",
                     help="come --per-classe, ma senza i PDF con tutte le carte")
     opts = ap.parse_args()
@@ -898,7 +970,10 @@ def main():
         k = opts.classe.strip().lower()
         righe = [r for r in righe if k in (r.get("classi") or "").lower()]
     righe.sort(key=lambda r: (int(r["livello"]), r["nome"].lower()))
-    temi = [opts.solo] if opts.solo else ["scuro", "chiaro"]
+    if opts.bis:
+        temi = ["bn", "chiaro"] if not opts.solo else [{"scuro": "bn", "chiaro": "chiaro"}[opts.solo]]
+    else:
+        temi = [opts.solo] if opts.solo else ["scuro", "chiaro"]
     if not opts.solo_classi:
         genera_set(righe, opts.out_dir, temi, opts, verbose=True)
 
@@ -918,7 +993,9 @@ def main():
 def genera_set(righe, cartella, temi, opts, verbose, classe=None):
     os.makedirs(cartella, exist_ok=True)
     for t in temi:
-        out = os.path.join(cartella, f"carte_{'scure' if t == 'scuro' else 'chiare'}_A3.pdf")
+        nome = {"scuro": "scure", "chiaro": "chiare", "bn": "bianco_nero"}[t]
+        pref = "carte_bis_" if opts.bis else "carte_"
+        out = os.path.join(cartella, f"{pref}{nome}_A3.pdf")
         rep = genera(righe, t, out, opts, classe=classe)
         if not verbose:
             continue
