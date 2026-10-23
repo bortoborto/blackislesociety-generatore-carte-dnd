@@ -16,6 +16,7 @@ Opzioni utili:
     --solo scuro|chiaro           genera un solo layout
     --senza-retro                 non inserisce le pagine del retro
     --senza-diagrammi             non disegna i diagrammi di gittata/area
+    --senza-pagina                non stampa "SRD 5.2.1 · p. N" in fondo alla descrizione
     --classe mago                 stampa solo gli incantesimi di una classe
     --per-classe                  crea anche una cartella per classe (Bardo/, Mago/, ...)
                                   con dentro i PDF scuro e chiaro di quella classe
@@ -25,6 +26,11 @@ Opzioni utili:
     --bis                         edizione Black Isle Society: fronte in bianco e
                                   nero e in versione chiara, retro nero con il logo
                                   (logo in assets/logo_bis.png o con --logo PERCORSO)
+    --poker                       carte formato poker (63 x 88 mm) con la cornice
+                                  grafica, logo nel cartiglio e retro tutto nero;
+                                  crea le versioni scura, bianco e nero e chiara
+    --foglio A3|A4                foglio per --poker (A3: 16 carte, A4: 9 carte)
+    --nero-k                      retro nero come 100% K in CMYK (solo inchiostro nero)
     --fronte-standard             nei PDF per classe usa il fronte normale
                                   (di default il fronte e' tinto nel colore della classe)
     --out-dir cartella            dove salvare i PDF
@@ -107,11 +113,11 @@ THEMES = {
 THEMES["bn"] = dict(
     page_bg="#ffffff", cut="#b5b5b5",
     card_fill="#ffffff", card_fill_top="#ffffff", card_border="#000000",
-    sep="#9a9a9a", title="#000000", text="#111111", stat_text="#111111",
+    sep="#9a9a9a", title="#000000", text="#000000", stat_text="#000000",
     dice="#000000", damage="#000000", save="#000000", dist="#000000",
     cond="#000000", hl_box="#555555", hl_icon="#000000",
     ring_fill="#ffffff", ring_stroke="#000000", ring_text="#000000",
-    grid="#000000", grid_alpha=0.16, diag_line="#000000", diag_label="#222222",
+    grid="#000000", grid_alpha=0.16, diag_line="#000000", diag_label="#000000",
     start="#000000", end="#000000", area="#000000",
     icon_mode="bw", back="bis", hl_bold=True,
 )
@@ -651,6 +657,8 @@ def disegna_carta(c, r, ox, oy, th, opts, report):
     # testo + diagramma
     tx, tw_ = ox + PAD_X, CARD_W - 2 * PAD_X
     avail = FOOT_SEP_Y - 3 - TEXT_TOP
+    if not opts.senza_pagina and riferimento(r):
+        avail -= 6.5
     vuole_diag = not opts.senza_diagrammi and (analizza_area(r) or breve_gittata(r.get("gittata"))[0] == "gittata_distanza")
     scelta = None
     modo = opts.testo
@@ -684,6 +692,8 @@ def disegna_carta(c, r, ox, oy, th, opts, report):
     yend = disegna_blocchi(c, blocchi, tx, Y(TEXT_TOP), tw_, fs, th, mode)
     if con_diag:
         disegna_diagramma(c, r, tx, yend - DIAGRAM_H - 1, tw_, DIAGRAM_H, th)
+    if not opts.senza_pagina:
+        disegna_riferimento(c, r, tx + tw_, Y(FOOT_SEP_Y - 2.2), th)
 
     # piede: componenti a sinistra, classi a destra
     fy = Y(FOOT_Y)
@@ -829,11 +839,30 @@ def disegna_retro_classe(c, ox, oy, classe, tipo):
 
 
 _LOGO = {}
+LOGO_URL = "https://blackislesociety.com/assets/logo.png"
+
+
+def scarica_logo(dest):
+    """Scarica il logo della Black Isle Society la prima volta che serve."""
+    import urllib.request
+    print(f"Logo non presente, lo scarico da {LOGO_URL} ...")
+    try:
+        req = urllib.request.Request(LOGO_URL, headers={"User-Agent": "genera-carte/1.0"})
+        with urllib.request.urlopen(req, timeout=20) as r, open(dest, "wb") as f:
+            f.write(r.read())
+        Image.open(dest).verify()
+        print(f"  salvato in {dest}")
+    except Exception as e:
+        if os.path.exists(dest):
+            os.remove(dest)
+        print(f"  download non riuscito ({e})")
 
 def carica_logo(path):
     """Carica il logo; se e' scuro lo rende bianco, cosi' si vede sul nero."""
     if path in _LOGO:
         return _LOGO[path]
+    if path and not os.path.exists(path) and os.path.abspath(path) == os.path.abspath(os.path.join(ASSETS, "logo_bis.png")):
+        scarica_logo(path)
     if not path or not os.path.exists(path):
         sys.exit(f"Logo non trovato: {path}\n"
                  "Scaricalo da https://blackislesociety.com/assets/logo.png e "
@@ -929,6 +958,334 @@ def genera(righe, tema, out_path, opts, classe=None):
     return report
 
 
+# ==========================================================================
+# Formato POKER (63 x 88 mm) con cornice grafica di sfondo
+# ==========================================================================
+MM = 72 / 25.4
+PK_W, PK_H = 63 * MM, 88 * MM          # carta
+PK_BLEED = 3 * MM                      # abbondanza dell'immagine cornice
+PK_GAP = 6 * MM                        # spazio tra le carte sul foglio
+PK_PX = PK_W / 744                     # punti per pixel della cornice (300 dpi)
+FOGLI = {"A3": (841.89, 1190.55, 4, 4), "A4": (595.28, 841.89, 3, 3)}
+
+# Zone della cornice, in pixel della carta (senza abbondanza), misurate sull'immagine
+Z = dict(
+    scuola=(95, 56, 193, 157),          # x0, y0, x1, y1
+    titolo=(203, 60, 532, 153),
+    livello=(597, 108, 52),             # cx, cy, r
+    stat=[(98, 204, 274, 245), (291, 204, 453, 245), (470, 204, 647, 245)],
+    testo=(101, 281, 644, 851),
+    piede_sx=(85, 888, 271, 983),
+    piede_dx=(482, 888, 660, 983),
+    ovale=(376, 936, 95, 41),           # cx, cy, semiassi
+)
+# zone della cornice scura e bianco/nero (stessa impaginazione, diversa da quella chiara)
+Z_ORNATA = dict(
+    scuola=(83, 46, 194, 161),
+    titolo=(222, 65, 525, 140),
+    livello=(607, 105, 54),
+    stat=[(79, 188, 274, 232), (276, 188, 470, 232), (473, 188, 666, 232)],
+    testo=(90, 262, 654, 838),
+    piede_sx=(65, 871, 253, 994),
+    piede_dx=(497, 871, 680, 994),
+    ovale=(375, 930, 102, 52),
+)
+Z_CHIARA = dict(Z)
+PK_ZONE = {"scuro": Z_ORNATA, "bn": Z_ORNATA, "chiaro": Z_CHIARA}
+PK_TEMI = {"scuro": "cornice_scura.png", "bn": "cornice_bn.png", "chiaro": "cornice_chiara.png"}
+# colore con cui si ripulisce l'interno dell'ovale prima di mettere il logo vero
+PK_OVALE = {"scuro": "#3b3b3c", "bn": "#ffffff", "chiaro": "#d1cfc5"}
+# colore del retro: nero, tranne la versione chiara che usa il fondo del pannello del testo
+PK_RETRO = {"scuro": "#000000", "bn": "#000000", "chiaro": "#e7e4db"}
+
+
+def _pz(c_ox, c_top, x, y):
+    """pixel della cornice -> coordinate PDF (y verso il basso nei pixel)."""
+    return c_ox + x * PK_PX, c_top - y * PK_PX
+
+
+_CORNICI = {}
+
+def cornice(tema):
+    if tema not in _CORNICI:
+        path = os.path.join(ASSETS, PK_TEMI[tema])
+        if not os.path.exists(path):
+            path = os.path.join(ASSETS, PK_TEMI["scuro"])
+        _CORNICI[tema] = ImageReader(path)
+    return _CORNICI[tema]
+
+
+_LOGO_TINTA = {}
+
+def logo_tinto(path, colore):
+    key = (path, colore)
+    if key not in _LOGO_TINTA:
+        im = Image.open(path).convert("RGBA")
+        fill = Image.new("RGBA", im.size, colore)
+        fill.putalpha(im.getchannel("A"))
+        _LOGO_TINTA[key] = (ImageReader(fill), im.size)
+    return _LOGO_TINTA[key]
+
+
+def riempi_zone(c, ox, top, colore):
+    """Nelle versioni chiare copre l'interno dei riquadri con un colore piatto."""
+    c.saveState()
+    c.setFillColor(HexColor(colore))
+    ins = 6  # pixel di rientro per non coprire i bordi metallici
+    def rr(z, rad=4):
+        x0, y0, x1, y1 = z
+        X0, Y0 = _pz(ox, top, x0 + ins, y1 - ins)
+        X1, Y1 = _pz(ox, top, x1 - ins, y0 + ins)
+        c.roundRect(X0, Y0, X1 - X0, Y1 - Y0, rad, stroke=0, fill=1)
+    rr(Z["scuola"], 3)
+    rr(Z["titolo"], 1)
+    for z in Z["stat"]:
+        rr(z, 1)
+    rr(Z["testo"], 9)
+    rr(Z["piede_sx"], 1)
+    rr(Z["piede_dx"], 1)
+    cx, cy, r = Z["livello"]
+    X, Y = _pz(ox, top, cx, cy)
+    c.circle(X, Y, (r - 5) * PK_PX, stroke=0, fill=1)
+    cx, cy, a, b = Z["ovale"]
+    X, Y = _pz(ox, top, cx, cy)
+    c.ellipse(X - (a - 5) * PK_PX, Y - (b - 5) * PK_PX, X + (a - 5) * PK_PX, Y + (b - 5) * PK_PX, stroke=0, fill=1)
+    c.restoreState()
+
+
+def testo_in_box(c, txt, font, size, x0, x1, yc, colore, min_size=5):
+    w = x1 - x0
+    while pdfmetrics.stringWidth(txt, font, size) > w and size > min_size:
+        size -= 0.2
+    c.setFont(font, size)
+    c.setFillColor(HexColor(colore))
+    c.drawCentredString((x0 + x1) / 2, yc - size * 0.35, txt)
+
+
+def disegna_carta_poker(c, r, ox, oy, tema, th, opts, report):
+    global Z
+    Z = PK_ZONE[tema]
+    mode = th["icon_mode"]
+    top = oy + PK_H
+    # sfondo: cornice con abbondanza
+    c.drawImage(cornice(tema), ox - PK_BLEED, oy - PK_BLEED, PK_W + 2 * PK_BLEED, PK_H + 2 * PK_BLEED)
+    if opts.logo and os.path.exists(opts.logo):
+        # copre il logo disegnato nella cornice: al suo posto va il file originale
+        cx, cy, a, b = Z["ovale"]
+        X, Y = _pz(ox, top, cx, cy)
+        c.saveState()
+        c.setFillColor(HexColor(PK_OVALE[tema]))
+        c.ellipse(X - (a - 4) * PK_PX, Y - (b + 1) * PK_PX, X + (a - 4) * PK_PX, Y + (b + 0.5) * PK_PX, stroke=0, fill=1)
+        c.restoreState()
+
+    # scuola
+    x0, y0, x1, y1 = Z["scuola"]
+    X, Y = _pz(ox, top, (x0 + x1) / 2, (y0 + y1) / 2)
+    disegna_icona(c, f"scuola_{(r.get('scuola') or '').strip().lower()}", X, Y, 19, mode, align="center")
+    # titolo
+    x0, y0, x1, y1 = Z["titolo"]
+    X0, Yc = _pz(ox, top, x0 + 10, (y0 + y1) / 2)
+    X1, _ = _pz(ox, top, x1 - 8, 0)
+    disegna_titolo_box(c, r["nome"], X0, X1, Yc, th)
+    # livello
+    cx, cy, rad = Z["livello"]
+    X, Y = _pz(ox, top, cx, cy)
+    txt = ROMANI[int(r["livello"])]
+    size = 10.5 if len(txt) <= 2 else (8.5 if len(txt) == 3 else 7.5)
+    c.setFillColor(HexColor(th["ring_text"]))
+    c.setFont("F-M", size)
+    c.drawCentredString(X, Y - size * 0.36, txt)
+
+    # statistiche: una per scomparto
+    gi, gt = breve_gittata(r.get("gittata"))
+    di, dt = breve_durata(r.get("durata"))
+    ti, tt = breve_tempo(r.get("tempo_di_lancio_breve"), r.get("tempo_di_lancio"))
+    for (icn, txt), z in zip(((gi, gt), (di, dt), (ti, tt)), Z["stat"]):
+        x0, y0, x1, y1 = z
+        X0, Yc = _pz(ox, top, x0 + 8, (y0 + y1) / 2)
+        X1, _ = _pz(ox, top, x1 - 8, 0)
+        ih, size = 8, 7
+        avail = X1 - X0 - ih - 2
+        while pdfmetrics.stringWidth(txt, "F", size) > avail and size > 4.8:
+            size -= 0.2
+        tw = pdfmetrics.stringWidth(txt, "F", size)
+        ic = icona(icn, mode)
+        iw = ih * ic[1][0] / ic[1][1] if ic else 0
+        start = (X0 + X1) / 2 - (iw + 1.6 + tw) / 2
+        disegna_icona(c, icn, start, Yc, ih, mode)
+        c.setFillColor(HexColor(th["stat_text"]))
+        c.setFont("F", size)
+        c.drawString(start + iw + 1.6, Yc - size * 0.35, txt)
+
+    # testo
+    x0, y0, x1, y1 = Z["testo"]
+    TX0, TY0 = _pz(ox, top, x0 + 24, y0 + 16)
+    TX1, TY1 = _pz(ox, top, x1 - 24, y1 - 14)
+    rif_y = TY1
+    if not opts.senza_pagina and riferimento(r):
+        TY1 += 4.0                      # spazio riservato al numero di pagina
+    tw_, avail = TX1 - TX0, TY0 - TY1
+    vuole_diag = not opts.senza_diagrammi and (analizza_area(r) or breve_gittata(r.get("gittata"))[0] == "gittata_distanza")
+    DH = 28
+    scelta = None
+    tentativi = (["completo"] if opts.testo in ("auto", "completo") else []) + (["breve"] if opts.testo in ("auto", "breve") else [])
+    for mt in tentativi:
+        min_fs = 4.2 if mt == "completo" and opts.testo == "auto" else 3.4
+        fs = 6.0
+        while fs >= min_fs - 1e-6:
+            bl, ub = blocchi_testo(r, th, fs, mt)
+            h = misura(bl, tw_, fs)
+            if vuole_diag and h + DH + 2 <= avail:
+                scelta = (bl, fs, True, ub); break
+            if h <= avail and (not vuole_diag or fs < 5.2):
+                scelta = (bl, fs, False, ub); break
+            fs -= 0.1
+        if scelta:
+            break
+    if not scelta:
+        bl, ub = blocchi_testo(r, th, 3.4, tentativi[-1])
+        scelta = (bl, 3.4, False, ub)
+        report["troppo_lunghe"].append(r["nome"])
+    bl, fs, con_diag, ub = scelta
+    if ub and (r.get("descrizione_completa") or "").strip():
+        report["breve"].append(r["nome"])
+    yend = disegna_blocchi(c, bl, TX0, TY0, tw_, fs, th, mode)
+    if con_diag:
+        disegna_diagramma(c, r, TX0, max(TY1, yend - DH - 1), tw_, DH, th)
+    if not opts.senza_pagina:
+        disegna_riferimento(c, r, TX1 - 11, rif_y - 1.0, th)
+
+    # piede sinistro: componenti + rituale
+    x0, y0, x1, y1 = Z["piede_sx"]
+    X0, Yc = _pz(ox, top, x0 + 12, (y0 + y1) / 2)
+    comps = (r.get("componenti") or "").upper()
+    x = X0
+    for k, nome in (("V", "comp_v"), ("S", "comp_s"), ("M", "comp_m")):
+        if k in comps:
+            x += disegna_icona(c, nome, x, Yc, 9, mode) + 1.6
+    if (r.get("rituale") or "").strip().lower().startswith("s"):
+        disegna_icona(c, "rituale", x, Yc, 9, mode)
+    # piede destro: classi (rimpicciolite se sono tante)
+    x0, y0, x1, y1 = Z["piede_dx"]
+    X0, Yc = _pz(ox, top, x0 + 10, (y0 + y1) / 2)
+    X1, _ = _pz(ox, top, x1 - 12, 0)
+    classi = [k.strip().lower() for k in (r.get("classi") or "").split(",") if k.strip()]
+    classi = [k for k in ORDINE_CLASSI if k in classi]
+    if classi:
+        h = min(9.0, (X1 - X0) / (len(classi) * 1.12))
+        x = X1
+        for k in reversed(classi):
+            x -= disegna_icona(c, f"classe_{k}", x, Yc, h, mode, align="right") + h * 0.12
+    # logo nel cartiglio ovale
+    if opts.logo and os.path.exists(opts.logo):
+        cx, cy, a, b = Z["ovale"]
+        X, Y = _pz(ox, top, cx, cy)
+        col = {"scuro": "#ffffff", "bn": "#000000", "chiaro": "#2f2f2f"}[tema]
+        rd, (w0, h0) = logo_tinto(opts.logo, col)
+        bw, bh = 2 * a * 0.80 * PK_PX, 2 * b * 0.80 * PK_PX   # quasi tutto l'ovale
+        sc = min(bw / w0, bh / h0)
+        c.drawImage(rd, X - w0 * sc / 2, Y - h0 * sc / 2, w0 * sc, h0 * sc, mask="auto")
+
+
+def riferimento(r):
+    """Testo del rimando alla fonte, stampato in fondo al riquadro della descrizione."""
+    p = (r.get("pagina_srd") or "").strip()
+    if p:
+        return f"SRD 5.2.1 · p. {p}"
+    if "manuale" in (r.get("fonte") or "").lower():
+        return "Manuale del Giocatore"
+    return ""
+
+
+def disegna_riferimento(c, r, x_right, y, th, size=4.6):
+    txt = riferimento(r)
+    if not txt:
+        return
+    c.saveState()
+    c.setFont("F-I", size)
+    c.setFillColor(HexColor(th["diag_label"]))
+    c.drawRightString(x_right, y, txt)
+    c.restoreState()
+
+
+def disegna_titolo_box(c, nome, x0, x1, yc, th):
+    w = x1 - x0
+    c.setFillColor(HexColor(th["title"]))
+    for size in (11, 10.5, 10, 9.5):
+        if pdfmetrics.stringWidth(nome, "F-M", size) <= w:
+            c.setFont("F-M", size)
+            c.drawCentredString((x0 + x1) / 2, yc - size * 0.35, nome)
+            return
+    parole = nome.split()
+    for size in (8.6, 8.2, 7.8, 7.4, 7, 6.6, 6.2):
+        righe, cur = [], ""
+        for p in parole:
+            t = (cur + " " + p).strip()
+            if pdfmetrics.stringWidth(t, "F-M", size) <= w or not cur:
+                cur = t
+            else:
+                righe.append(cur); cur = p
+        righe.append(cur)
+        if len(righe) <= 2 and all(pdfmetrics.stringWidth(x, "F-M", size) <= w for x in righe):
+            c.setFont("F-M", size)
+            lead = size * 1.0
+            t0 = yc + (len(righe) - 1) * lead / 2 - size * 0.35
+            for i, x in enumerate(righe):
+                c.drawCentredString((x0 + x1) / 2, t0 - i * lead, x)
+            return
+    c.setFont("F-M", 6)
+    c.drawCentredString((x0 + x1) / 2, yc - 2, nome[:30])
+
+
+def genera_poker(righe, tema, out_path, opts):
+    th = dict(THEMES["scuro" if tema == "scuro" else tema])
+    if tema == "scuro":
+        th.update(ring_text="#e8e8e8", text="#f0f0f0")
+    if tema == "chiaro":
+        th.update(text="#262626", title="#262626", stat_text="#262626", ring_text="#262626")
+    pw, ph, cols, rows = FOGLI[opts.foglio]
+    gw = cols * PK_W + (cols - 1) * PK_GAP
+    gh = rows * PK_H + (rows - 1) * PK_GAP
+    mx, my = (pw - gw) / 2, (ph - gh) / 2
+    c = canvas.Canvas(out_path, pagesize=(pw, ph))
+    c.setTitle(f"Carte incantesimi poker ({tema})")
+    report = {"breve": [], "troppo_lunghe": []}
+    per = cols * rows
+
+    def pos(k, mirror=False):
+        col, row = k % cols, k // cols
+        if mirror:
+            col = cols - 1 - col
+        return mx + col * (PK_W + PK_GAP), ph - my - (row + 1) * PK_H - row * PK_GAP
+
+    for i in range(0, len(righe), per):
+        blocco = righe[i:i + per]
+        for k, r in enumerate(blocco):
+            ox, oy = pos(k)
+            disegna_carta_poker(c, r, ox, oy, tema, th, opts, report)
+        # segni di taglio sui margini del foglio
+        c.setStrokeColor(HexColor("#000000" if tema != "scuro" else "#888888"))
+        c.setLineWidth(0.3)
+        for col in range(cols):
+            for xx in (mx + col * (PK_W + PK_GAP), mx + col * (PK_W + PK_GAP) + PK_W):
+                c.line(xx, ph - my + 3, xx, ph - 2)
+                c.line(xx, my - 3, xx, 2)
+        for row in range(rows):
+            for yy in (ph - my - row * (PK_H + PK_GAP), ph - my - row * (PK_H + PK_GAP) - PK_H):
+                c.line(2, yy, mx - 3, yy)
+                c.line(pw - mx + 3, yy, pw - 2, yy)
+        c.showPage()
+        if not opts.senza_retro:
+            if opts.nero_k and PK_RETRO[tema] == "#000000":
+                c.setFillColorCMYK(0, 0, 0, 1)     # nero solo inchiostro K (100% K)
+            else:
+                c.setFillColor(HexColor(PK_RETRO[tema]))
+            c.rect(0, 0, pw, ph, stroke=0, fill=1)
+            c.showPage()
+    c.save()
+    return report
+
+
 def leggi_csv(path):
     with open(path, encoding="utf-8-sig", newline="") as f:
         rd = csv.DictReader(f)
@@ -949,6 +1306,8 @@ def main():
     ap.add_argument("--solo", choices=["scuro", "chiaro"])
     ap.add_argument("--senza-retro", action="store_true")
     ap.add_argument("--senza-diagrammi", action="store_true")
+    ap.add_argument("--senza-pagina", action="store_true",
+                    help="non stampa il rimando alla pagina dell'SRD")
     ap.add_argument("--classe", help="es. mago, chierico, warlock...")
     ap.add_argument("--per-classe", action="store_true",
                     help="crea anche una cartella per classe con i PDF di quella classe")
@@ -960,6 +1319,13 @@ def main():
                     help="edizione Black Isle Society: fronte bianco e nero + chiaro, retro nero con logo")
     ap.add_argument("--logo", default=os.path.join(ASSETS, "logo_bis.png"),
                     help="percorso del logo per il retro dell'edizione --bis")
+    ap.add_argument("--solo-bn", action="store_true", help=argparse.SUPPRESS)
+    ap.add_argument("--poker", action="store_true",
+                    help="carte formato poker 63x88 mm con la cornice grafica e retro nero")
+    ap.add_argument("--nero-k", action="store_true",
+                    help="retro nero in CMYK 0/0/0/100 (solo inchiostro nero) invece di RGB 0/0/0")
+    ap.add_argument("--foglio", choices=["A3", "A4"], default="A3",
+                    help="foglio per il formato poker: A3 = 16 carte, A4 = 9 carte")
     ap.add_argument("--solo-classi", action="store_true",
                     help="come --per-classe, ma senza i PDF con tutte le carte")
     opts = ap.parse_args()
@@ -970,6 +1336,21 @@ def main():
         k = opts.classe.strip().lower()
         righe = [r for r in righe if k in (r.get("classi") or "").lower()]
     righe.sort(key=lambda r: (int(r["livello"]), r["nome"].lower()))
+    if opts.poker:
+        temi = [opts.solo] if opts.solo in ("scuro", "chiaro") else ["scuro", "bn", "chiaro"]
+        if opts.solo_bn:
+            temi = ["bn"]
+        poker_set(righe, opts.out_dir, temi, opts, verbose=True, solo_classi=opts.solo_classi)
+        if opts.per_classe or opts.solo_classi:
+            print("\nPDF per classe:")
+            for k in ORDINE_CLASSI:
+                sub = [r for r in righe
+                       if k in [c.strip().lower() for c in (r.get("classi") or "").split(",")]]
+                if sub:
+                    cart = os.path.join(opts.out_dir, k.capitalize())
+                    poker_set(sub, cart, temi, opts, verbose=False)
+                    print(f"  {k.capitalize():<9} {len(sub):>3} carte  ->  {cart}")
+        return
     if opts.bis:
         temi = ["bn", "chiaro"] if not opts.solo else [{"scuro": "bn", "chiaro": "chiaro"}[opts.solo]]
     else:
@@ -988,6 +1369,20 @@ def main():
             genera_set(sub, cartella, temi, opts, verbose=False,
                        classe=k)
             print(f"  {k.capitalize():<9} {len(sub):>3} carte  ->  {cartella}")
+
+
+def poker_set(righe, cartella, temi, opts, verbose, solo_classi=False):
+    if solo_classi:
+        return
+    os.makedirs(cartella, exist_ok=True)
+    for t in temi:
+        nome = {"scuro": "scure", "chiaro": "chiare", "bn": "bianco_nero"}[t]
+        out = os.path.join(cartella, f"carte_poker_{nome}_{opts.foglio}.pdf")
+        rep = genera_poker(righe, t, out, opts)
+        if verbose:
+            print(f"Creato {out}  ({len(righe)} carte)")
+            if rep["breve"] and t == temi[0]:
+                print(f"  {len(rep['breve'])} carte usano la descrizione breve.")
 
 
 def genera_set(righe, cartella, temi, opts, verbose, classe=None):
