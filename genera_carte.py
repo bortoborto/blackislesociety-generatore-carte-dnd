@@ -31,6 +31,9 @@ Opzioni utili:
                                   crea le versioni scura, bianco e nero e chiara
     --foglio A3|A4                foglio per --poker (A3: 16 carte, A4: 9 carte)
     --nero-k                      retro nero come 100% K in CMYK (solo inchiostro nero)
+    --piega                       (con --poker) fronte e retro con logo affiancati sullo
+                                  stesso lato: si stampa solo il fronte del foglio e si
+                                  piega. A3 orizzontale: 9 carte, A4 orizzontale: 4 carte
     --fronte-standard             nei PDF per classe usa il fronte normale
                                   (di default il fronte e' tinto nel colore della classe)
     --out-dir cartella            dove salvare i PDF
@@ -1192,6 +1195,9 @@ def riferimento(r):
     p = (r.get("pagina_srd") or "").strip()
     if p:
         return f"SRD 5.2.1 · p. {p}"
+    pm = (r.get("pagina_manuale") or "").strip()
+    if pm:
+        return f"Manuale del Giocatore · p. {pm}"
     if "manuale" in (r.get("fonte") or "").lower():
         return "Manuale del Giocatore"
     return ""
@@ -1237,12 +1243,79 @@ def disegna_titolo_box(c, nome, x0, x1, yc, th):
     c.drawCentredString((x0 + x1) / 2, yc - 2, nome[:30])
 
 
+# formato "a libro": fronte + retro affiancati sullo stesso lato del foglio, da piegare
+FOGLI_PIEGA = {"A3": (1190.55, 841.89, 3, 3), "A4": (841.89, 595.28, 2, 2)}   # orizzontali
+PIEGA_RETRO = {"scuro": ("#000000", "#ffffff"), "chiaro": ("#e7e4db", "#2f2f2f"),
+               "bn": ("#000000", "#ffffff")}   # (fondo, logo)
+
+
+def disegna_retro_piega(c, ox, oy, tema, opts):
+    """Pannello retro a destra della carta (ox = linea di piega)."""
+    fondo, col_logo = PIEGA_RETRO[tema]
+    if opts.nero_k and fondo == "#000000":
+        c.setFillColorCMYK(0, 0, 0, 1)
+    else:
+        c.setFillColor(HexColor(fondo))
+    c.rect(ox, oy - PK_BLEED, PK_W + PK_BLEED, PK_H + 2 * PK_BLEED, stroke=0, fill=1)
+    if opts.logo and os.path.exists(opts.logo):
+        rd, (w0, h0) = logo_tinto(opts.logo, col_logo)
+        sc = min(PK_W * 0.72 / w0, PK_H * 0.5 / h0)
+        w, h = w0 * sc, h0 * sc
+        c.drawImage(rd, ox + (PK_W - w) / 2, oy + (PK_H - h) / 2, w, h, mask="auto")
+
+
+def genera_poker_piega(righe, tema, out_path, opts, th):
+    pw, ph, cols, rows = FOGLI_PIEGA[opts.foglio]
+    cw = 2 * PK_W                                   # coppia fronte + retro
+    gw = cols * cw + (cols - 1) * PK_GAP
+    gh = rows * PK_H + (rows - 1) * PK_GAP
+    mx, my = (pw - gw) / 2, (ph - gh) / 2
+    c = canvas.Canvas(out_path, pagesize=(pw, ph))
+    c.setTitle(f"Carte incantesimi poker da piegare ({tema})")
+    report = {"breve": [], "troppo_lunghe": []}
+    per = cols * rows
+    for i in range(0, len(righe), per):
+        for k, r in enumerate(righe[i:i + per]):
+            col, row = k % cols, k // cols
+            ox = mx + col * (cw + PK_GAP)
+            oy = ph - my - (row + 1) * PK_H - row * PK_GAP
+            # fronte, tagliato sulla linea di piega (l'abbondanza resta solo sui lati esterni)
+            c.saveState()
+            p = c.beginPath()
+            p.rect(ox - PK_BLEED, oy - PK_BLEED, PK_W + PK_BLEED, PK_H + 2 * PK_BLEED)
+            c.clipPath(p, stroke=0, fill=0)
+            disegna_carta_poker(c, r, ox, oy, tema, th, opts, report)
+            c.restoreState()
+            disegna_retro_piega(c, ox + PK_W, oy, tema, opts)
+        # segni di taglio (bordi esterni) e di piega (tratteggiati) sui margini
+        c.setLineWidth(0.3)
+        for col in range(cols):
+            x0 = mx + col * (cw + PK_GAP)
+            for xx, piega in ((x0, False), (x0 + PK_W, True), (x0 + cw, False)):
+                c.setStrokeColor(HexColor("#888888" if piega else "#000000"))
+                if piega:
+                    c.setDash(2, 1.5)
+                c.line(xx, ph - my + 3, xx, ph - 2)
+                c.line(xx, my - 3, xx, 2)
+                c.setDash()
+        c.setStrokeColor(HexColor("#000000"))
+        for row in range(rows):
+            for yy in (ph - my - row * (PK_H + PK_GAP), ph - my - row * (PK_H + PK_GAP) - PK_H):
+                c.line(2, yy, mx - 3, yy)
+                c.line(pw - mx + 3, yy, pw - 2, yy)
+        c.showPage()
+    c.save()
+    return report
+
+
 def genera_poker(righe, tema, out_path, opts):
     th = dict(THEMES["scuro" if tema == "scuro" else tema])
     if tema == "scuro":
         th.update(ring_text="#e8e8e8", text="#f0f0f0")
     if tema == "chiaro":
         th.update(text="#262626", title="#262626", stat_text="#262626", ring_text="#262626")
+    if opts.piega:
+        return genera_poker_piega(righe, tema, out_path, opts, th)
     pw, ph, cols, rows = FOGLI[opts.foglio]
     gw = cols * PK_W + (cols - 1) * PK_GAP
     gh = rows * PK_H + (rows - 1) * PK_GAP
@@ -1319,11 +1392,13 @@ def main():
                     help="edizione Black Isle Society: fronte bianco e nero + chiaro, retro nero con logo")
     ap.add_argument("--logo", default=os.path.join(ASSETS, "logo_bis.png"),
                     help="percorso del logo per il retro dell'edizione --bis")
-    ap.add_argument("--solo-bn", action="store_true", help=argparse.SUPPRESS)
+    ap.add_argument("--solo-bn", action="store_true", help="con --poker genera solo la versione bianco e nero")
     ap.add_argument("--poker", action="store_true",
                     help="carte formato poker 63x88 mm con la cornice grafica e retro nero")
     ap.add_argument("--nero-k", action="store_true",
                     help="retro nero in CMYK 0/0/0/100 (solo inchiostro nero) invece di RGB 0/0/0")
+    ap.add_argument("--piega", action="store_true",
+                    help="con --poker: fronte e retro affiancati sullo stesso lato, da piegare (A3/A4 orizzontale)")
     ap.add_argument("--foglio", choices=["A3", "A4"], default="A3",
                     help="foglio per il formato poker: A3 = 16 carte, A4 = 9 carte")
     ap.add_argument("--solo-classi", action="store_true",
@@ -1377,7 +1452,8 @@ def poker_set(righe, cartella, temi, opts, verbose, solo_classi=False):
     os.makedirs(cartella, exist_ok=True)
     for t in temi:
         nome = {"scuro": "scure", "chiaro": "chiare", "bn": "bianco_nero"}[t]
-        out = os.path.join(cartella, f"carte_poker_{nome}_{opts.foglio}.pdf")
+        tipo = "poker_piega" if opts.piega else "poker"
+        out = os.path.join(cartella, f"carte_{tipo}_{nome}_{opts.foglio}.pdf")
         rep = genera_poker(righe, t, out, opts)
         if verbose:
             print(f"Creato {out}  ({len(righe)} carte)")
