@@ -44,6 +44,7 @@ Alla fine lo script elenca le carte in cui è successo.
 """
 import argparse
 import csv
+import datetime
 import io
 import os
 import re
@@ -1423,7 +1424,7 @@ def main():
                        if k in [c.strip().lower() for c in (r.get("classi") or "").split(",")]]
                 if sub:
                     cart = os.path.join(opts.out_dir, k.capitalize())
-                    poker_set(sub, cart, temi, opts, verbose=False)
+                    poker_set(sub, cart, temi, opts, verbose=False, classe=k)
                     print(f"  {k.capitalize():<9} {len(sub):>3} carte  ->  {cart}")
         return
     if opts.bis:
@@ -1446,14 +1447,15 @@ def main():
             print(f"  {k.capitalize():<9} {len(sub):>3} carte  ->  {cartella}")
 
 
-def poker_set(righe, cartella, temi, opts, verbose, solo_classi=False):
+def poker_set(righe, cartella, temi, opts, verbose, solo_classi=False, classe=None):
     if solo_classi:
         return
     os.makedirs(cartella, exist_ok=True)
+    classe = (classe or opts.classe or "tutte").strip().lower()
+    data = datetime.date.today().strftime("%d_%m_%Y")
     for t in temi:
-        nome = {"scuro": "scure", "chiaro": "chiare", "bn": "bianco_nero"}[t]
-        tipo = "poker_piega" if opts.piega else "poker"
-        out = os.path.join(cartella, f"carte_{tipo}_{nome}_{opts.foglio}.pdf")
+        nome = {"scuro": "scura", "chiaro": "chiara", "bn": "bianco_e_nero"}[t]
+        out = os.path.join(cartella, f"BIS_{classe}_{nome}_{opts.foglio}_{data}.pdf")
         rep = genera_poker(righe, t, out, opts)
         if verbose:
             print(f"Creato {out}  ({len(righe)} carte)")
